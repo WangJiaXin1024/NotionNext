@@ -3,43 +3,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { checkStrIsNotionId, getLastPartOfUrl } from '@/lib/utils'
 import { idToUuid } from 'notion-utils'
 import BLOG from './blog.config'
-import blocks from './GeoLite2-Country-Blocks.json' // 根目录 JSON
 
 /**
- * IP 工具：IPv4 转数字
- */
-function ipToNumber(ip: string) {
-  return ip
-    .split('.')
-    .reduce((acc, octet) => (acc << 8) + Number(octet), 0)
-}
-
-/**
- * 判断是否中国大陆 IP
- */
-function isChineseIP(ip: string) {
-  const num = ipToNumber(ip)
-  return blocks.some(block => num >= block.start && num <= block.end)
-}
-
-/**
- * 屏蔽中国大陆 IP
- */
-function blockChina(req: NextRequest) {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0] || '0.0.0.0'
-  if (isChineseIP(ip)) {
-    return new NextResponse('Access Denied', { status: 403 })
-    // 或者跳转到自定义页面
-    // return NextResponse.redirect(new URL('/blocked', req.url))
-  }
-  return null
-}
-
-/**
- * Next.js Middleware 配置
- * 白名单路径，避免拦截静态资源和部分 API
+ * Clerk 身份验证中间件
  */
 export const config = {
+  // 这里设置白名单，防止静态资源被拦截
   matcher: ['/((?!.*\\..*|_next|/sign-in|/auth).*)', '/', '/(api|trpc)(.*)']
 }
 
@@ -58,41 +27,68 @@ const isTenantAdminRoute = createRouteMatcher([
 ])
 
 /**
- * noAuthMiddleware：处理未配置 Clerk 的重定向逻辑
+ * 没有配置权限相关功能的返回
+ * @param req
+ * @param ev
+ * @returns
  */
-const noAuthMiddleware = async (req: NextRequest) => {
+// eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+const noAuthMiddleware = async (req: NextRequest, ev: any) => {
+  // 如果没有配置 Clerk 相关环境变量，返回一个默认响应或者继续处理请求
   if (BLOG['UUID_REDIRECT']) {
     let redirectJson: Record<string, string> = {}
     try {
       const response = await fetch(`${req.nextUrl.origin}/redirect.json`)
-      if (response.ok) redirectJson = await response.json()
+      if (response.ok) {
+        redirectJson = (await response.json()) as Record<string, string>
+      }
     } catch (err) {
-      console.error('Error fetching redirect.json:', err)
+      console.error('Error fetching static file:', err)
     }
-
-    let lastPart = getLastPartOfUrl(req.nextUrl.pathname)
-    if (checkStrIsNotionId(lastPart)) lastPart = idToUuid(lastPart)
-
-    const target = redirectJson[lastPart]
-    if (typeof target === 'string' && target.length > 0) {
-      return NextResponse.redirect(new URL(target, req.url))
+    let lastPart = getLastPartOfUrl(req.nextUrl.pathname) as string
+    if (checkStrIsNotionId(lastPart)) {
+      lastPart = idToUuid(lastPart)
+    }
+    if (lastPart && redirectJson[lastPart]) {
+      const redirectToUrl = req.nextUrl.clone()
+      redirectToUrl.pathname = '/' + redirectJson[lastPart]
+      console.log(
+        `redirect from ${req.nextUrl.pathname} to ${redirectToUrl.pathname}`
+      )
+      return NextResponse.redirect(redirectToUrl, 308)
     }
   }
-
   return NextResponse.next()
 }
-
 /**
- * 默认中间件：先屏蔽大陆 IP，再执行 Clerk/NotionNext 的逻辑
+ * 鉴权中间件
  */
-export default async function middleware(req: NextRequest, event: any) {
-  // 1️⃣ 屏蔽中国大陆 IP
-  const blocked = blockChina(req)
-  if (blocked) return blocked
+const authMiddleware = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+  ? clerkMiddleware((auth, req) => {
+      const { userId } = auth()
+      // 处理 /dashboard 路由的登录保护
+      if (isTenantRoute(req)) {
+        if (!userId) {
+          // 用户未登录，重定向到 /sign-in
+          const url = new URL('/sign-in', req.url)
+          url.searchParams.set('redirectTo', req.url) // 保存重定向目标
+          return NextResponse.redirect(url)
+        }
+      }
 
-  // 2️⃣ 如果未配置 Clerk，则使用 noAuthMiddleware
-  if (!process.env.CLERK_SECRET_KEY) return noAuthMiddleware(req)
+      // 处理管理员相关权限保护
+      if (isTenantAdminRoute(req)) {
+        auth().protect(has => {
+          return (
+            has({ permission: 'org:sys_memberships:manage' }) ||
+            has({ permission: 'org:sys_domains_manage' })
+          )
+        })
+      }
 
-  // 3️⃣ 否则走 Clerk 权限逻辑
-  return clerkMiddleware()(req, event)
-}
+      // 默认继续处理请求
+      return NextResponse.next()
+    })
+  : noAuthMiddleware
+
+export default authMiddleware
