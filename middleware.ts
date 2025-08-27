@@ -9,6 +9,7 @@ import BLOG from './blog.config'
  */
 function blockChina(req: NextRequest) {
   const country = req.headers.get('x-vercel-ip-country') || 'unknown'
+  console.log('Detected country:', country) // 调试用
   if (country === 'CN') {
     // 返回 403 禁止访问
     return new NextResponse('Access Denied', { status: 403 })
