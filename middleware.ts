@@ -8,8 +8,8 @@ import BLOG from './blog.config'
  * 🚫 屏蔽中国大陆 IP
  */
 function blockChina(req: NextRequest) {
-  const country = req.headers.get('x-vercel-ip-country') || 'unknown'
-  console.log('Detected country:', country) // 调试用
+  const country = req.geo?.country || 'unknown'
+  console.log('Detected country:', country) // 调试用，部署后可删除
   if (country === 'CN') {
     // 返回 403 禁止访问
     return new NextResponse('Access Denied', { status: 403 })
@@ -70,7 +70,6 @@ const noAuthMiddleware = async (req: NextRequest) => {
 
   return NextResponse.next()
 }
-
 
 /**
  * 默认中间件：先屏蔽大陆，再执行 Clerk/NotionNext 的逻辑
