@@ -3,18 +3,33 @@ import { NextRequest, NextResponse } from 'next/server'
 import { checkStrIsNotionId, getLastPartOfUrl } from '@/lib/utils'
 import { idToUuid } from 'notion-utils'
 import BLOG from './blog.config'
+import blocks from './GeoLite2-Country-Blocks.json' // 根目录 JSON
 
 /**
- * 🚫 屏蔽中国大陆 IP
+ * IP 工具：IPv4 转数字
+ */
+function ipToNumber(ip: string) {
+  return ip
+    .split('.')
+    .reduce((acc, octet) => (acc << 8) + Number(octet), 0)
+}
+
+/**
+ * 判断是否中国大陆 IP
+ */
+function isChineseIP(ip: string) {
+  const num = ipToNumber(ip)
+  return blocks.some(block => num >= block.start && num <= block.end)
+}
+
+/**
+ * 屏蔽中国大陆 IP
  */
 function blockChina(req: NextRequest) {
-  const country = req.geo?.country || 'unknown'
-  console.log('Detected country:', country) // 调试用，部署后可删除
-  if (country === 'CN') {
-    // 返回 403 禁止访问
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0] || '0.0.0.0'
+  if (isChineseIP(ip)) {
     return new NextResponse('Access Denied', { status: 403 })
-
-    // 或者跳转到一个自定义页面（可选）
+    // 或者跳转到自定义页面
     // return NextResponse.redirect(new URL('/blocked', req.url))
   }
   return null
@@ -22,7 +37,7 @@ function blockChina(req: NextRequest) {
 
 /**
  * Next.js Middleware 配置
- * 这里设置白名单，防止静态资源被拦截
+ * 白名单路径，避免拦截静态资源和部分 API
  */
 export const config = {
   matcher: ['/((?!.*\\..*|_next|/sign-in|/auth).*)', '/', '/(api|trpc)(.*)']
@@ -43,24 +58,20 @@ const isTenantAdminRoute = createRouteMatcher([
 ])
 
 /**
- * 没有配置权限相关功能的返回
+ * noAuthMiddleware：处理未配置 Clerk 的重定向逻辑
  */
 const noAuthMiddleware = async (req: NextRequest) => {
   if (BLOG['UUID_REDIRECT']) {
     let redirectJson: Record<string, string> = {}
     try {
       const response = await fetch(`${req.nextUrl.origin}/redirect.json`)
-      if (response.ok) {
-        redirectJson = (await response.json()) as Record<string, string>
-      }
+      if (response.ok) redirectJson = await response.json()
     } catch (err) {
-      console.error('Error fetching static file:', err)
+      console.error('Error fetching redirect.json:', err)
     }
 
-    let lastPart = getLastPartOfUrl(req.nextUrl.pathname) as string
-    if (checkStrIsNotionId(lastPart)) {
-      lastPart = idToUuid(lastPart)
-    }
+    let lastPart = getLastPartOfUrl(req.nextUrl.pathname)
+    if (checkStrIsNotionId(lastPart)) lastPart = idToUuid(lastPart)
 
     const target = redirectJson[lastPart]
     if (typeof target === 'string' && target.length > 0) {
@@ -72,18 +83,16 @@ const noAuthMiddleware = async (req: NextRequest) => {
 }
 
 /**
- * 默认中间件：先屏蔽大陆，再执行 Clerk/NotionNext 的逻辑
+ * 默认中间件：先屏蔽大陆 IP，再执行 Clerk/NotionNext 的逻辑
  */
 export default async function middleware(req: NextRequest, event: any) {
-  // 1. 检查是否来自中国大陆
+  // 1️⃣ 屏蔽中国大陆 IP
   const blocked = blockChina(req)
   if (blocked) return blocked
 
-  // 2. 如果没有配置 Clerk，则走 noAuthMiddleware
-  if (!process.env.CLERK_SECRET_KEY) {
-    return noAuthMiddleware(req)
-  }
+  // 2️⃣ 如果未配置 Clerk，则使用 noAuthMiddleware
+  if (!process.env.CLERK_SECRET_KEY) return noAuthMiddleware(req)
 
-  // 3. 否则走 Clerk 的权限逻辑
+  // 3️⃣ 否则走 Clerk 权限逻辑
   return clerkMiddleware()(req, event)
 }
