@@ -5,6 +5,20 @@ import { idToUuid } from 'notion-utils'
 import BLOG from './blog.config'
 
 /**
+ * 🚫 屏蔽中国大陆 IP
+ */
+function blockChina(req: NextRequest) {
+  const country = req.headers.get('x-vercel-ip-country') || 'unknown'
+  if (country === 'CN') {
+    // 直接返回 403
+    return new NextResponse('Access Denied', { status: 403 })
+    // 或者跳转到提示页面
+    // return NextResponse.redirect(new URL('/blocked', req.url))
+  }
+  return null
+}
+
+/**
  * Clerk 身份验证中间件
  */
 export const config = {
@@ -92,3 +106,13 @@ const authMiddleware = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
   : noAuthMiddleware
 
 export default authMiddleware
+
+// 原本的 middleware 改造
+export default function middleware(req: NextRequest) {
+  // 先检查是否来自中国大陆
+  const blocked = blockChina(req)
+  if (blocked) return blocked
+
+  // 再走原本的 Clerk 身份验证
+  return clerkMiddleware()(req)
+}
