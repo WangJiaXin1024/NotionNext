@@ -74,7 +74,7 @@ const noAuthMiddleware = async (req: NextRequest) => {
 /**
  * 默认中间件：先屏蔽大陆，再执行 Clerk/NotionNext 的逻辑
  */
-export default function middleware(req: NextRequest) {
+export default async function middleware(req: NextRequest, event: any) {
   // 1. 检查是否来自中国大陆
   const blocked = blockChina(req)
   if (blocked) return blocked
@@ -85,5 +85,5 @@ export default function middleware(req: NextRequest) {
   }
 
   // 3. 否则走 Clerk 的权限逻辑
-  return clerkMiddleware()(req)
+  return clerkMiddleware()(req, event)
 }
