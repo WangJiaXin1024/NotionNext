@@ -55,16 +55,21 @@ const noAuthMiddleware = async (req: NextRequest) => {
     } catch (err) {
       console.error('Error fetching static file:', err)
     }
+
     let lastPart = getLastPartOfUrl(req.nextUrl.pathname) as string
     if (checkStrIsNotionId(lastPart)) {
       lastPart = idToUuid(lastPart)
     }
-    if (redirectJson[lastPart]) {
-      return NextResponse.redirect(new URL(redirectJson[lastPart], req.url))
+
+    const target = redirectJson[lastPart]
+    if (typeof target === 'string' && target.length > 0) {
+      return NextResponse.redirect(new URL(target, req.url))
     }
   }
+
   return NextResponse.next()
 }
+
 
 /**
  * 默认中间件：先屏蔽大陆，再执行 Clerk/NotionNext 的逻辑
